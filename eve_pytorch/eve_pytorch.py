@@ -1,30 +1,10 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from einops import rearrange
+from einops.layers.torch import Rearrange
 
-# {   "encoder_parameters": {
-#         "hidden_layers_sizes"         :   [2000,1000,300],
-#         "z_dim"                               :   50,
-#         "convolve_input"                      :   false,
-#         "convolution_input_depth"             :   40,
-#         "nonlinear_activation"                :   "relu",
-#         "dropout_proba"                       :   0.0
-#     },
-#     "decoder_parameters": {
-#         "hidden_layers_sizes"         :   [300,1000,2000],
-#         "z_dim"                               :   50,
-#         "bayesian_decoder"                    :   true,
-#         "first_hidden_nonlinearity"           :   "relu", 
-#         "last_hidden_nonlinearity"            :   "relu", 
-#         "dropout_proba"                       :   0.1,
-#         "convolve_output"                     :   true,
-#         "convolution_output_depth"            :   40, 
-#         "include_temperature_scaler"          :   true, 
-#         "include_sparsity"                    :   false, 
-#         "num_tiles_sparsity"                  :   0,
-#         "logit_sparsity_p"                    :   0
-#     },
 #     "training_parameters": {
 #         "num_training_steps"                :   400000,
 #         "learning_rate"                     :   1e-4,
@@ -43,11 +23,30 @@ from einops import rearrange
 #     }
 # }
 
+def sample(mean, log_var):
+    mu = torch.zeros_like(mean)
+    sigma = torch.ones_like(log_var)
+    eps = torch.normal(mu, sigma).cuda()
+    return torch.exp(0.5 * log_var) * eps + mean
+
+class SampledLinear(nn.Module):
+    def __init__(self, in_features, out_features):
+        self.to_mu = nn.Linear(in_features, out_features)
+        self.to_log_var = nn.Linear(in_features, out_features)
+
+        # nn.init.constant_(self.to_mu.bias, 0.1)
+        # nn.init.constant_(self.to_z_log_var.bias, -10.0)
+    
+    def forward(self, x):
+        mu = self.to_mu(x)
+        log_var = self.to_log_var(x)
+        return sample(mu, log_var)
+
 class Encoder(nn.Module):
-    def __init__(self, seq_len, alphabet_size):
+    def __init__(self, alphabet_size, seq_len):
         super().__init__()
 
-        self.linear = nn.Sequential(
+        self.stem = nn.Sequential(
             nn.Linear(alphabet_size * seq_len, 2000),
             nn.ReLU(),
             nn.Linear(2000, 1000),
@@ -55,27 +54,83 @@ class Encoder(nn.Module):
             nn.Linear(1000, 300),
             nn.ReLU(),
         )
-        self.to_z_mean = nn.Linear(300, 50)
-        # nn.init.constant_(self.to_z_mean.bias, 0.1)
+
+        self.to_z_mu = nn.Linear(300, 50)
         self.to_z_log_var = nn.Linear(300, 50)
-        # nn.init.constant_(self.to_z_log_var.bias, -10.0)
+
+        # Not now
+        nn.init.constant_(self.to_z_mu.bias, 0.1)
+        nn.init.constant_(self.to_z_log_var.bias, -10.0)
 
     def forward(self, x):
         x = rearrange(x, 'b c l -> b (c l)')
-        x = self.linear(x)
 
-        z_mean = self.to_z_mean(x)
-        z_log_var = self.to_z_log_var(x)
+        x = self.stem(x)
+        z_mu = self.to_z_mu(x)
+        z_log_var = self.to_z_mu(x)
 
-        return z_mean, z_log_var
+        return z_mu, z_log_var
+
+class DecoderLayer(nn.Module):
+    def __init__(self, in_features, out_features, use_xavier_init=False):
+        super().__init__()
+
+        self.w_mu = nn.Linear(in_features, out_features)
+        self.w_log_var = nn.Linear(in_features, out_features)
+
+        if use_xavier_init:
+            nn.init.xavier_normal_(self.w_mu)
+        else:
+            nn.init.constant_(self.w_mu.weight, 0.1)
+            nn.init.constant_(self.w_mu.bias, 0.1)
+
+        nn.init.constant_(self.w_log_var.weight, -10.0)
+        nn.init.constant_(self.w_log_var.bias, -10.0)
+
+    def forward(self, z):
+        w = sample(self.w_mu.weight, self.w_log_var.weight)
+        b = sample(self.w_mu.bias, self.w_log_var.bias)
+
+        return F.linear(z, weight=w, bias=b)
+
+class Decoder(nn.Module):
+    def __init__(self, alphabet_size, seq_len):
+        super().__init__()
+
+        self.stem = nn.Sequential(
+            DecoderLayer(50, 300),
+            nn.ReLU(),
+            DecoderLayer(300, 1000),
+            nn.ReLU(),
+            DecoderLayer(1000, 2000),
+            nn.ReLU(),
+            DecoderLayer(2000, alphabet_size * seq_len),
+            nn.ReLU(),
+            Rearrange('b (l c) -> (b l) c', c=alphabet_size),
+            DecoderLayer(alphabet_size, alphabet_size),
+            Rearrange('(b l) c -> b c l', l=seq_len),
+        )
+
+    def forward(self, z):
+        z = self.stem(z)
+        return z
 
 class EVE(nn.Module):
-    def __init__(self):
+    def __init__(self, alphabet_size=20, seq_len=100):
         super().__init__()
+
+        self.enc = Encoder(alphabet_size, seq_len)
+        self.dec = Decoder(alphabet_size, seq_len)
     
     def forward(self, x):
+        z_mu, z_log_var = self.enc(x)
+        z = sample(z_mu, z_log_var)
+        x = self.dec(z)
         return x
 
 if __name__ == '__main__':
-    model = EVE()
+    model = EVE().cuda()
+
+    x = torch.randn([16, 20, 100]).cuda()
+    print(model(x).shape)
     
