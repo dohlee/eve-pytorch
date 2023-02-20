@@ -58,7 +58,6 @@ class Encoder(nn.Module):
         self.to_z_mu = nn.Linear(300, 50)
         self.to_z_log_var = nn.Linear(300, 50)
 
-        # Not now
         nn.init.constant_(self.to_z_mu.bias, 0.1)
         nn.init.constant_(self.to_z_log_var.bias, -10.0)
 
@@ -72,43 +71,70 @@ class Encoder(nn.Module):
         return z_mu, z_log_var
 
 class DecoderLayer(nn.Module):
-    def __init__(self, in_features, out_features, use_xavier_init=False):
+    def __init__(self, in_features, out_features, use_xavier_init=False, bias=True):
         super().__init__()
+        self.bias = bias
 
-        self.w_mu = nn.Linear(in_features, out_features)
-        self.w_log_var = nn.Linear(in_features, out_features)
-
+        self.w_mu = nn.Linear(in_features, out_features, bias=bias)
         if use_xavier_init:
-            nn.init.xavier_normal_(self.w_mu)
-        else:
-            nn.init.constant_(self.w_mu.weight, 0.1)
+            nn.init.xavier_normal_(self.w_mu.weight)
+        elif self.bias:
             nn.init.constant_(self.w_mu.bias, 0.1)
 
+        self.w_log_var = nn.Linear(in_features, out_features, bias=bias)
         nn.init.constant_(self.w_log_var.weight, -10.0)
-        nn.init.constant_(self.w_log_var.bias, -10.0)
+        if self.bias:
+            nn.init.constant_(self.w_log_var.bias, -10.0)
 
     def forward(self, z):
         w = sample(self.w_mu.weight, self.w_log_var.weight)
-        b = sample(self.w_mu.bias, self.w_log_var.bias)
 
-        return F.linear(z, weight=w, bias=b)
+        if self.bias:
+            b = sample(self.w_mu.bias, self.w_log_var.bias)
+            return F.linear(z, weight=w, bias=b)
+        else:
+            return F.linear(z, weight=w)
+        
+class AddBias(nn.Module):
+    def __init__(self, in_features):
+        super().__init__()
+        self.bias = nn.Parameter(torch.zeros(in_features))
+        nn.init.constant_(self.bias, 0.1)
+    
+    def forward(self, x):
+        return x + self.bias
+    
+class TemperatureScale(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        self.mu = nn.Parameter(torch.ones(1))
+        self.log_var = nn.Parameter(torch.ones(1) * -10.0)
+    
+    def forward(self, x):
+        scaler = sample(self.mu, self.log_var)
+        return torch.log(1.0 + torch.exp(scaler)) * x
 
 class Decoder(nn.Module):
-    def __init__(self, alphabet_size, seq_len):
+    def __init__(self, alphabet_size, convolution_depth, seq_len):
         super().__init__()
 
         self.stem = nn.Sequential(
-            DecoderLayer(50, 300),
+            DecoderLayer(50, 300),  # 0
             nn.ReLU(),
-            DecoderLayer(300, 1000),
+            DecoderLayer(300, 1000),  # 2
             nn.ReLU(),
-            DecoderLayer(1000, 2000),
+            DecoderLayer(1000, 2000),  # 4
             nn.ReLU(),
-            DecoderLayer(2000, alphabet_size * seq_len),
+            DecoderLayer(2000, seq_len * convolution_depth, use_xavier_init=True, bias=False),  # 6, last hidden layer
             nn.ReLU(),
-            Rearrange('b (l c) -> (b l) c', c=alphabet_size),
-            DecoderLayer(alphabet_size, alphabet_size),
-            Rearrange('(b l) c -> b c l', l=seq_len),
+            Rearrange('b (l c) -> (b l) c', c=convolution_depth),
+            DecoderLayer(convolution_depth, alphabet_size, bias=False),  # 9, 
+            Rearrange('(b l) c -> b (l c)', l=seq_len),
+            AddBias(alphabet_size * seq_len),
+            Rearrange('b (l c) -> b l c', c=alphabet_size),
+            TemperatureScale(),
+            # nn.LogSoftmax(dim=-1),
         )
 
     def forward(self, z):
@@ -116,21 +142,40 @@ class Decoder(nn.Module):
         return z
 
 class EVE(nn.Module):
-    def __init__(self, alphabet_size=20, seq_len=100):
+    def __init__(self, alphabet_size=21, convolution_depth=40, seq_len=100):
         super().__init__()
 
-        self.enc = Encoder(alphabet_size, seq_len)
-        self.dec = Decoder(alphabet_size, seq_len)
+        self.encoder = Encoder(alphabet_size, seq_len)
+        self.decoder = Decoder(alphabet_size, convolution_depth, seq_len)
     
-    def forward(self, x):
-        z_mu, z_log_var = self.enc(x)
+    def get_kl_w(self):
+        kl_w = 0.0
+        for layer_idx in [0, 2, 4, 6, 9]:
+            for param_type in ['weight', 'bias']:
+                if f'w_mu.{param_type}' not in self.decoder.stem[layer_idx].state_dict():
+                    continue
+
+                mu = self.decoder.stem[layer_idx].state_dict()[f'w_mu.{param_type}'].flatten()
+                log_var = self.decoder.stem[layer_idx].state_dict()[f'w_log_var.{param_type}'].flatten()
+                kl_w += -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+
+        return kl_w
+    
+    def forward(self, x, return_latent=False):
+        z_mu, z_log_var = self.encoder(x)
         z = sample(z_mu, z_log_var)
-        x = self.dec(z)
-        return x
+        x = self.decoder(z)
+
+        if return_latent:
+            return x, z_mu, z_log_var
+        else:
+            return x
 
 if __name__ == '__main__':
     model = EVE().cuda()
 
-    x = torch.randn([16, 20, 100]).cuda()
+    x = torch.randn([16, 21, 100]).cuda()
     print(model(x).shape)
-    
+
+    print(model.get_kl_w())    
+
