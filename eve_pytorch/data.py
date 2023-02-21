@@ -21,8 +21,8 @@ class MSADataset(Dataset):
             self.data.append(one_hot_encode_amino_acid(record.seq))
 
         self.seq_len = self.data[0].shape[1]
-        self._compute_sampling_weights()
-        self._compute_neff()
+        # self._compute_sampling_weights()
+        # self._compute_neff()
     
     def _hamming(self, i, j):
         return 1.0 - torch.sum(self.data[i] * self.data[j]) / self.seq_len

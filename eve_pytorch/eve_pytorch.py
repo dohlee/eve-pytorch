@@ -71,12 +71,12 @@ class Encoder(nn.Module):
         return z_mu, z_log_var
 
 class DecoderLayer(nn.Module):
-    def __init__(self, in_features, out_features, use_xavier_init=False, bias=True):
+    def __init__(self, in_features, out_features, bias=True, xavier_init=False):
         super().__init__()
         self.bias = bias
 
         self.w_mu = nn.Linear(in_features, out_features, bias=bias)
-        if use_xavier_init:
+        if xavier_init:
             nn.init.xavier_normal_(self.w_mu.weight)
         elif self.bias:
             nn.init.constant_(self.w_mu.bias, 0.1)
@@ -98,11 +98,11 @@ class DecoderLayer(nn.Module):
 class AddBias(nn.Module):
     def __init__(self, in_features):
         super().__init__()
-        self.bias = nn.Parameter(torch.zeros(in_features))
-        nn.init.constant_(self.bias, 0.1)
+        self.mu = nn.Parameter(torch.ones(in_features) * 0.1)
+        self.log_var = nn.Parameter(torch.ones(in_features) * -10.0)
     
     def forward(self, x):
-        return x + self.bias
+        return x + sample(self.mu, self.log_var)
     
 class TemperatureScale(nn.Module):
     def __init__(self):
@@ -110,7 +110,7 @@ class TemperatureScale(nn.Module):
         
         self.mu = nn.Parameter(torch.ones(1))
         self.log_var = nn.Parameter(torch.ones(1) * -10.0)
-    
+ 
     def forward(self, x):
         scaler = sample(self.mu, self.log_var)
         return torch.log(1.0 + torch.exp(scaler)) * x
@@ -120,20 +120,20 @@ class Decoder(nn.Module):
         super().__init__()
 
         self.stem = nn.Sequential(
-            DecoderLayer(50, 300),  # 0
+            DecoderLayer(50, 300),  # 0, linear layer, weights are sampled from N(mu, sigma).
             nn.ReLU(),
-            DecoderLayer(300, 1000),  # 2
+            DecoderLayer(300, 1000),  # 2, linear layer with sampled weights.
             nn.ReLU(),
-            DecoderLayer(1000, 2000),  # 4
+            DecoderLayer(1000, 2000),  # 4, linear layer with sampled weights.
             nn.ReLU(),
-            DecoderLayer(2000, seq_len * convolution_depth, use_xavier_init=True, bias=False),  # 6, last hidden layer
+            DecoderLayer(2000, seq_len * convolution_depth, bias=False, xavier_init=True),  # 6, last hidden layer with sampled weights.
             nn.ReLU(),
             Rearrange('b (l c) -> (b l) c', c=convolution_depth),
-            DecoderLayer(convolution_depth, alphabet_size, bias=False),  # 9, 
-            Rearrange('(b l) c -> b (l c)', l=seq_len),
-            AddBias(alphabet_size * seq_len),
-            Rearrange('b (l c) -> b l c', c=alphabet_size),
-            TemperatureScale(),
+            DecoderLayer(convolution_depth, alphabet_size, bias=False),  # 9, output convolution layer with sampled weights.
+            Rearrange('(b l) a -> b (l a)', l=seq_len),
+            AddBias(alphabet_size * seq_len),  # 11, add sampled bias to output.
+            Rearrange('b (l a) -> b l a', a=alphabet_size),
+            TemperatureScale(), # 13, temperature scaler is also sampled.
             # nn.LogSoftmax(dim=-1),
         )
 
@@ -142,13 +142,13 @@ class Decoder(nn.Module):
         return z
 
 class EVE(nn.Module):
-    def __init__(self, alphabet_size=21, convolution_depth=40, seq_len=100):
+    def __init__(self, seq_len, alphabet_size=21, convolution_depth=40):
         super().__init__()
 
         self.encoder = Encoder(alphabet_size, seq_len)
         self.decoder = Decoder(alphabet_size, convolution_depth, seq_len)
     
-    def get_kl_w(self):
+    def get_w_kl(self):
         kl_w = 0.0
         for layer_idx in [0, 2, 4, 6, 9]:
             for param_type in ['weight', 'bias']:
@@ -158,6 +158,16 @@ class EVE(nn.Module):
                 mu = self.decoder.stem[layer_idx].state_dict()[f'w_mu.{param_type}'].flatten()
                 log_var = self.decoder.stem[layer_idx].state_dict()[f'w_log_var.{param_type}'].flatten()
                 kl_w += -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+
+        # Add kl_w for last bias layer.
+        mu = self.decoder.stem[11].state_dict()['mu'].flatten()
+        log_var = self.decoder.stem[11].state_dict()['log_var'].flatten()
+        kl_w += -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+
+        # Add kl_w for temperature scaler.
+        mu = self.decoder.stem[13].state_dict()['mu'].flatten()
+        log_var = self.decoder.stem[13].state_dict()['log_var'].flatten()
+        kl_w += -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
 
         return kl_w
     
@@ -172,10 +182,10 @@ class EVE(nn.Module):
             return x
 
 if __name__ == '__main__':
-    model = EVE().cuda()
+    model = EVE(seq_len=100).cuda()
 
     x = torch.randn([16, 21, 100]).cuda()
     print(model(x).shape)
 
-    print(model.get_kl_w())    
+    print(model.get_w_kl())    
 

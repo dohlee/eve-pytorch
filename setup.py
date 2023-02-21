@@ -1,10 +1,10 @@
 from setuptools import setup, find_packages
 
 setup(
-  name = 'eve-pytorch',
+  name = 'eve_pytorch',
   packages = find_packages(exclude=[]),
   include_package_data = True,
-  version = '0.0.1',
+  version = '0.0.2',
   license='MIT',
   description = 'EVE - Pytorch',
   author = 'Dohoon Lee',
