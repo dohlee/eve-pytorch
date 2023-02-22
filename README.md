@@ -33,7 +33,7 @@ x_reconstructed, z_mu, z_log_var = model(x, return_latent=True)
 ## Training
 ```bash
 $ python -m eve_pytorch.train \
-  --msa data/msa.filtered.a2m  # Multiple sequence alignment. \
+  --msa data/msa.filtered.a2m  \ # Multiple sequence alignment.
   --output ckpts/best_checkpoint.pt \
   --use-wandb  # Optional, for logging
 ```
