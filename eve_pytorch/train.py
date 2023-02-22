@@ -67,8 +67,10 @@ def validate(model, val_loader, val_Neff):
     model.train()
     return np.mean(losses), np.mean(ce_losses), np.mean(z_kl_losses), np.mean(w_kl_losses)
 
-def train(model, train_loader, val_loader, optimizer, num_steps, train_Neff, val_Neff):
+def train(model, train_loader, val_loader, optimizer, num_steps, train_Neff, val_Neff, best_model_fp):
     model.train()
+
+    best_val_loss = np.inf
 
     # Training loop with progressbar.
     bar = tqdm.tqdm(cycle(train_loader, n=num_steps), total=num_steps, leave=False)
@@ -115,6 +117,12 @@ def train(model, train_loader, val_loader, optimizer, num_steps, train_Neff, val
                 'val/w_kl': val_w_kl_loss
             })
 
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                torch.save(model.state_dict(), best_model_fp)
+
+                print('Saved best model.')
+
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -160,7 +168,6 @@ def main():
     train_Neff = train_set.get_Neff()
     val_Neff = val_set.get_Neff()
 
-    # TODO: sample sequences according to sampling weights = 1 / (# seqs with hamming < th)
     sampler = WeightedRandomSampler(weights=train_set.get_sampling_weights(), num_samples=len(train_set), replacement=True)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, sampler=sampler, drop_last=True, num_workers=16, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, drop_last=False, num_workers=16, pin_memory=True)
@@ -171,9 +178,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.97)
 
-    train(model, train_loader, val_loader, optimizer, num_steps=args.num_steps, train_Neff=train_Neff, val_Neff=val_Neff)
-
-    torch.save(model.state_dict(), args.output)
+    train(model, train_loader, val_loader, optimizer, num_steps=args.num_steps, train_Neff=train_Neff, val_Neff=val_Neff, best_model_fp=args.output)
 
 if __name__ == '__main__':
     main()
