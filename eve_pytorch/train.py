@@ -64,6 +64,7 @@ def validate(model, val_loader, val_Neff):
             z_kl_losses.append(z_kl_loss.item())
             w_kl_losses.append(w_kl_loss.item())
 
+    model.train()
     return np.mean(losses), np.mean(ce_losses), np.mean(z_kl_losses), np.mean(w_kl_losses)
 
 def train(model, train_loader, val_loader, optimizer, num_steps, train_Neff, val_Neff):
