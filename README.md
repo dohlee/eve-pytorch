@@ -15,7 +15,7 @@ import torch
 from eve_pytorch import EVE
 
 SEQ_LEN = 1000
-ALPHABET_SIZE = 2000
+ALPHABET_SIZE = 21
 
 model = EVE(seq_len=SEQ_LEN, alphabet_size=ALPHABET_SIZE)
 
