@@ -11,42 +11,28 @@ def one_hot_encode_amino_acid(sequence):
     return torch.eye(len(a2i))[[a2i[a] for a in sequence]].T
 
 class MSADataset(Dataset):
-    def __init__(self, a2m_fp):
+    def __init__(self, records):
         """MSA Dataset
-        a2m_fp: Path to a2m file.
+        records: List of SeqRecord objects.
         """
 
-        self.data = []
-        for record in SeqIO.parse(a2m_fp, "fasta"):
+        self.data, self.weights = [], []
+        for record in records:
             self.data.append(one_hot_encode_amino_acid(record.seq))
+            self.weights.append(float(record.id.split('@@@')[1]))
 
         self.seq_len = self.data[0].shape[1]
-        # self._compute_sampling_weights()
-        # self._compute_neff()
     
     def _hamming(self, i, j):
         return 1.0 - torch.sum(self.data[i] * self.data[j]) / self.seq_len
-
-    def _compute_sampling_weights(self):
-        """Compute sampling weights for each sequence in the MSA.
-        For ith sequence, w_i = 1 / (# sequences in MSA that is hamming_dist < 0.2)
-        """
-        self.weights = []
-        for i in range(len(self.data)):
-            cnt = 0
-            for j in range(len(self.data)):
-                if i == j:
-                    continue
-                
-                if self._hamming(i, j) < 0.2:
-                    cnt += 1
-            
-            self.weights.append(1.0 / cnt)
     
-    def _compute_Neff(self):
-        """Compute effective number of sequences in the MSA.
+    def get_Neff(self):
+        """Return the effective number of sequences in the MSA.
         """
-        self.Neff = sum(self.weights)
+        return sum(self.weights)
+    
+    def get_sampling_weights(self):
+        return self.weights
 
     def __len__(self):
         return len(self.data)
@@ -59,7 +45,7 @@ if __name__ == '__main__':
 
     ds = MSADataset('../data/P53_HUMAN_b01.filtered.a2m')
 
-    print(ds.Neff)
+    print('Neff', ds.get_Neff())
 
     loader = DataLoader(ds, batch_size=16, shuffle=False)
     for batch in loader:
