@@ -4,10 +4,38 @@
 
 Implementation of evolutionary model of variant effect (EVE), a deep generative model of evolutionary data, in PyTorch. It's just an re-implementation of the official model for my own learning purpose, which is also implemented in PyTorch. The official implementation can be found [here](https://github.com/OATML-Markslab/EVE).
 
+## Installation
+```bash
+$ pip install eve-pytorch
+```
+
 ## Usage
 ```python
+import torch
 from eve_pytorch import EVE
 
+SEQ_LEN = 1000
+ALPHABET_SIZE = 2000
+
+model = EVE(seq_len=SEQ_LEN, alphabet_size=ALPHABET_SIZE)
+
+# ... training ...
+
+x = torch.randn(1, 4, 1000)
+
+# If you want to get the reconstructed sequence only,
+x_reconstructed = model(x, return_latent=False)
+
+# or, if you want to get the latent variables
+x_reconstructed, z_mu, z_log_var = model(x, return_latent=True)
+```
+
+## Training
+```bash
+$ python -m eve_pytorch.train \
+  --msa data/msa.filtered.a2m  # Multiple sequence alignment. \
+  --output ckpts/best_checkpoint.pt \
+  --use-wandb  # Optional, for logging
 ```
 
 ## Citations
