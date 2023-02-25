@@ -29,19 +29,6 @@ def sample(mean, log_var):
     eps = torch.normal(mu, sigma).cuda()
     return torch.exp(0.5 * log_var) * eps + mean
 
-class SampledLinear(nn.Module):
-    def __init__(self, in_features, out_features):
-        self.to_mu = nn.Linear(in_features, out_features)
-        self.to_log_var = nn.Linear(in_features, out_features)
-
-        # nn.init.constant_(self.to_mu.bias, 0.1)
-        # nn.init.constant_(self.to_z_log_var.bias, -10.0)
-    
-    def forward(self, x):
-        mu = self.to_mu(x)
-        log_var = self.to_log_var(x)
-        return sample(mu, log_var)
-
 class Encoder(nn.Module):
     def __init__(self, alphabet_size, seq_len):
         super().__init__()
