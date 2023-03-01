@@ -63,6 +63,78 @@ with torch.no_grad():
   model.compute_evolutionary_index(wt_seq, mut_seq, num_samples=20_000)
 ```
 
+### Example
+The example below shows how to compute the evolutionary indices of three variants in TP53 gene.
+F109Q and V173Y are pathogenic variants, while R273C is a benign variant.
+Note the difference of the evolutionary indices between the pathogenic variants and the benign variant.
+```python
+    from Bio import SeqIO
+
+    def get_sequence_length(a2m_fp):
+        """Get the sequence length of the first sequence in the a2m file.
+        a2m_fp: Path to a2m file.
+        """
+        for record in SeqIO.parse(a2m_fp, "fasta"):
+            return len(record.seq)
+        
+    a2i = {a:i for i, a in enumerate('ACDEFGHIKLMNPQRSTVWY-')}
+    def one_hot_encode_amino_acid(sequence):
+        return torch.eye(len(a2i))[[a2i[a] for a in sequence]].T
+        
+    model = EVE(seq_len=100).cuda()
+
+    msa = 'data/P53_HUMAN_b01.filtered.a2m'
+    ALPHABET_SIZE = 21
+
+    print('Loading pretrained model.')
+    model = EVE(seq_len=get_sequence_length(msa), alphabet_size=ALPHABET_SIZE)
+    model.load_state_dict(torch.load('ckpts/TP53.best.pt'))
+    model.cuda()
+
+    wt_seq = """LSPDDIEQWFTEDPGDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGFRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+
+    # F109Q
+    mut_seq_pathogenic1 = """LSPDDIEQWFTEDPGDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGQRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+    
+    # V173Y
+    mut_seq_pathogenic2 = """LSPDDIEQWFTEDPGDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGFRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVYRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+
+    # M66V
+    mut_seq_benign = """LSPDDIEQWFTEDPGDEAPRVPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGFRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+
+    wt_seq, mut_seq_benign, mut_seq_pathogenic1, mut_seq_pathogenic2 = map(
+        lambda x: one_hot_encode_amino_acid(x).cuda(),
+        [wt_seq, mut_seq_benign, mut_seq_pathogenic1, mut_seq_pathogenic2]
+    )
+
+    model.eval()
+    with torch.no_grad():
+        print(model.compute_evolutionary_index(wt_seq, mut_seq_pathogenic1))  # 9.0448 (may vary slightly)
+        print(model.compute_evolutionary_index(wt_seq, mut_seq_pathogenic2))  # 11.9176 (may vary slightly)
+        print(model.compute_evolutionary_index(wt_seq, mut_seq_benign))       # -0.4336 (may vary slightly)
+
+```
+
 ## Citations
 
 ```bibtex
