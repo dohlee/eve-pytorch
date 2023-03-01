@@ -187,7 +187,7 @@ class EVE(nn.Module):
             z_kl_loss = -0.5 * torch.sum(1 + z_log_var - z_mu.pow(2) - z_log_var.exp())
             w_kl_loss = self.get_w_kl()
 
-            elbo = ce_loss + z_kl_loss + w_kl_loss
+            elbo = -1.0 * (ce_loss + z_kl_loss + w_kl_loss)
             wt_elbos.append(elbo.cpu().numpy())
         wt_elbos = np.array(wt_elbos)
 
@@ -203,7 +203,7 @@ class EVE(nn.Module):
             z_kl_loss = -0.5 * torch.sum(1 + z_log_var - z_mu.pow(2) - z_log_var.exp())
             w_kl_loss = self.get_w_kl()
 
-            elbo = ce_loss + z_kl_loss + w_kl_loss
+            elbo = -1.0 * (ce_loss + z_kl_loss + w_kl_loss)
             mut_elbos.append(elbo.cpu().numpy())
         mut_elbos = np.array(mut_elbos)
         
