@@ -168,9 +168,27 @@ def main():
     train_Neff = train_set.get_Neff()
     val_Neff = val_set.get_Neff()
 
-    sampler = WeightedRandomSampler(weights=train_set.get_sampling_weights(), num_samples=len(train_set), replacement=True)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, sampler=sampler, drop_last=True, num_workers=16, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, drop_last=False, num_workers=16, pin_memory=True)
+    sampler = WeightedRandomSampler(
+        weights=train_set.get_sampling_weights(),
+        num_samples=len(train_set),
+        replacement=True
+    )
+    train_loader = DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        sampler=sampler,
+        drop_last=True,
+        num_workers=16,
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=args.batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=16,
+        pin_memory=True
+    )
 
     model = EVE(seq_len=get_sequence_length(args.msa), alphabet_size=ALPHABET_SIZE)
     model = model.cuda()

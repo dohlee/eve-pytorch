@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+
 from einops import rearrange
 from einops.layers.torch import Rearrange
 
@@ -131,6 +133,8 @@ class Decoder(nn.Module):
 class EVE(nn.Module):
     def __init__(self, seq_len, alphabet_size=21, convolution_depth=40):
         super().__init__()
+        self.seq_len = seq_len
+        self.alphabet_size = alphabet_size
 
         self.encoder = Encoder(alphabet_size, seq_len)
         self.decoder = Decoder(alphabet_size, convolution_depth, seq_len)
@@ -167,12 +171,107 @@ class EVE(nn.Module):
             return x, z_mu, z_log_var
         else:
             return x
+    
+    def compute_evolutionary_index(self, wt_seq, mut_seq, num_samples=20_000):
+        wt_seq, mut_seq = map(lambda x: rearrange(x, '... -> () ...'), [wt_seq, mut_seq])
+
+        wt_elbos = []
+        for _ in range(num_samples):
+            seq_recon, z_mu, z_log_var = self.forward(wt_seq, return_latent=True)
+
+            ce_loss = F.cross_entropy(
+                seq_recon.view(-1, self.alphabet_size),
+                wt_seq.argmax(dim=1).flatten(),
+                reduction='sum'
+            )
+            z_kl_loss = -0.5 * torch.sum(1 + z_log_var - z_mu.pow(2) - z_log_var.exp())
+            w_kl_loss = self.get_w_kl()
+
+            elbo = ce_loss + z_kl_loss + w_kl_loss
+            wt_elbos.append(elbo.cpu().numpy())
+        wt_elbos = np.array(wt_elbos)
+
+        mut_elbos = []
+        for _ in range(num_samples):
+            seq_recon, z_mu, z_log_var = self.forward(mut_seq, return_latent=True)
+
+            ce_loss = F.cross_entropy(
+                seq_recon.view(-1, self.alphabet_size),
+                mut_seq.argmax(dim=1).flatten(),
+                reduction='sum'
+            )
+            z_kl_loss = -0.5 * torch.sum(1 + z_log_var - z_mu.pow(2) - z_log_var.exp())
+            w_kl_loss = self.get_w_kl()
+
+            elbo = ce_loss + z_kl_loss + w_kl_loss
+            mut_elbos.append(elbo.cpu().numpy())
+        mut_elbos = np.array(mut_elbos)
+        
+        return np.mean(wt_elbos - mut_elbos)
 
 if __name__ == '__main__':
+    from Bio import SeqIO
+
+    def get_sequence_length(a2m_fp):
+        """Get the sequence length of the first sequence in the a2m file.
+        a2m_fp: Path to a2m file.
+        """
+        for record in SeqIO.parse(a2m_fp, "fasta"):
+            return len(record.seq)
+        
+    a2i = {a:i for i, a in enumerate('ACDEFGHIKLMNPQRSTVWY-')}
+    def one_hot_encode_amino_acid(sequence):
+        return torch.eye(len(a2i))[[a2i[a] for a in sequence]].T
+        
     model = EVE(seq_len=100).cuda()
 
-    x = torch.randn([16, 21, 100]).cuda()
-    print(model(x).shape)
+    msa = 'data/P53_HUMAN_b01.filtered.a2m'
+    ALPHABET_SIZE = 21
 
-    print(model.get_w_kl())    
+    print('Loading pretrained model.')
+    model = EVE(seq_len=get_sequence_length(msa), alphabet_size=ALPHABET_SIZE)
+    model.load_state_dict(torch.load('ckpts/TP53.best.pt'))
+    model.cuda()
+
+    wt_seq = """LSPDDIEQWFTEDPGDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGFRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+
+    # F109Q
+    mut_seq_pathogenic1 = """LSPDDIEQWFTEDPGDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGQRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+    
+    # V173Y
+    mut_seq_pathogenic2 = """LSPDDIEQWFTEDPGDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGFRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVYRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+
+    # M66V
+    mut_seq_benign = """LSPDDIEQWFTEDPGDEAPRVPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQG
+SYGQRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQ
+SQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEV
+GSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTE
+EENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELN
+EALELKDAQAGKEPGGSRAHSSHLKSKKG""".replace('\n', '')
+
+    wt_seq, mut_seq_benign, mut_seq_pathogenic1, mut_seq_pathogenic2 = map(
+        lambda x: one_hot_encode_amino_acid(x).cuda(),
+        [wt_seq, mut_seq_benign, mut_seq_pathogenic1, mut_seq_pathogenic2]
+    )
+
+    model.eval()
+    with torch.no_grad():
+        print(model.compute_evolutionary_index(wt_seq, mut_seq_pathogenic1))
+        print(model.compute_evolutionary_index(wt_seq, mut_seq_pathogenic2))
+        print(model.compute_evolutionary_index(wt_seq, mut_seq_benign))
 

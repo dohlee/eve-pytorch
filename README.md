@@ -38,6 +38,31 @@ $ python -m eve_pytorch.train \
   --use-wandb  # Optional, for logging
 ```
 
+## Computing evolutionary index
+The authors defined an **evolutionary index** of a protein variant as the relative fitness of mutated sequence $\mathbf{s}$ compared with that of a wildtype sequence $\mathbf{w}$. Since computing the exact log-likelihood is intractable, the authors approximated the log-likelihood ratio of the two sequences as the difference between the ELBO of the two sequences:
+
+$$ELBO(\mathbf{w}) - ELBO(\mathbf{s})$$
+
+In this reproduction, I implemented `EVE.compute_evolutionary_index()` method to compute the evolutionary index of a protein variant. The method takes two sequences as input, and returns the evolutionary index of the variant. Optionally, you can tweak `num_samples` parameter to control the number of samples for the Monte Carlo sampling of latent vectors.
+
+```python
+import torch
+from eve_pytorch import EVE
+
+SEQ_LEN = 1000
+ALPHABET_SIZE = 21
+
+model = EVE(seq_len=SEQ_LEN, alphabet_size=ALPHABET_SIZE)
+model.load_state_dict(torch.load('path/to/best/checkpoint.pt'))
+
+wt_seq = # One-hot encoded wildtype amino acid sequence.
+mut_seq = # One-hot encoded mutated amino acid sequence.
+
+model.eval()
+with torch.no_grad():
+  model.compute_evolutionary_index(wt_seq, mut_seq, num_samples=20_000)
+```
+
 ## Citations
 
 ```bibtex
